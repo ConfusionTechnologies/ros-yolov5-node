@@ -1,0 +1,16 @@
+# ROS2
+COLCON_IGNORE
+build/*
+install/*
+log/*
+site/*
+
+# python
+__pycache__/
+*.py[cod]
+
+# cpp debug symbols
+.vscode/browse.vc.db*
+
+# profiling
+*.lprof
