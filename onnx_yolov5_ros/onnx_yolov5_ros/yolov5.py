@@ -11,7 +11,7 @@ import numpy as np
 from onnxruntime import InferenceSession
 
 from sensor_msgs.msg import Image
-from nicefaces.msg import BBox2D, Pred2D
+from nicefaces.msg import BBox2D, Pred2D, Pred2DArray
 from foxglove_msgs.msg import ImageMarkerArray
 from visualization_msgs.msg import ImageMarker
 from std_msgs.msg import ColorRGBA
@@ -26,7 +26,7 @@ cv_bridge = CvBridge()
 
 @dataclass
 class YoloV5Cfg(JobCfg):
-    model_path: str = "/code/yolov5n6.onnx"
+    model_path: str = "/code/yolov5m6.onnx"
 
     frames_in_topic: str = "~/frames_in"
     preds_out_topic: str = "~/preds_out"
@@ -55,7 +55,7 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
         self._frames_sub = node.create_subscription(
             Image, cfg.frames_in_topic, self._on_input, 30
         )
-        self._pred_pub = node.create_publisher(Pred2D, cfg.preds_out_topic, 30)
+        self._pred_pub = node.create_publisher(Pred2DArray, cfg.preds_out_topic, 30)
         self._marker_pub = node.create_publisher(ImageMarkerArray, cfg.markers_topic, 1)
 
         self._init_model(cfg)
@@ -81,13 +81,14 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
 
     def _init_model(self, cfg: YoloV5Cfg):
         self.log.info("Initializing ONNX...")
+        self.log.info(f"Model Path: {cfg.model_path}")
         self.session = InferenceSession(cfg.model_path, providers=cfg.onnx_providers)
         # https://onnxruntime.ai/docs/api/python/api_summary.html#modelmetadata
         self.metadata = self.session.get_modelmeta()
 
         # these details were added by the YoloV5 toolkit
         model_details = self.metadata.custom_metadata_map
-        self.log.info(f"Model Info: {model_details}")
+        self.log.info(f"Model Info: {self.metadata.custom_metadata_map}")
         # TODO: imghw is fixed & should be read from metadata
         # imghw config option should be replaced with resizing behaviour
         # examples: contain, fill, stretch, tile (sliding window)
@@ -138,13 +139,19 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
 
         dets = self._forward(img).astype(float)  # ROS2 msgs are too type-sensitive
 
-        for det in dets:
-            pred = Pred2D()
-            pred.header = msg.header
-            pred.pred = BBox2D(is_norm=False, type=BBox2D.XYXY, box=det[:4])
-            pred.score = det[4]
-            pred.label = self.label_map[int(det[5])]
-            self._pred_pub.publish(pred)
+        self._pred_pub.publish(
+            Pred2DArray(
+                preds=[
+                    Pred2D(
+                        header=msg.header,
+                        pred=BBox2D(is_norm=False, type=BBox2D.XYXY, box=det[:4]),
+                        score=det[4],
+                        label=self.label_map[int(det[5])],
+                    )
+                    for det in dets
+                ]
+            )
+        )
 
         self._marker_pub.publish(
             ImageMarkerArray(
