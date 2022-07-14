@@ -1,6 +1,5 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
-import json
 import sys
 from ast import literal_eval
 
@@ -13,6 +12,10 @@ from onnxruntime import InferenceSession
 
 from sensor_msgs.msg import Image
 from nicefaces.msg import BBox2D, Pred2D
+from foxglove_msgs.msg import ImageMarkerArray
+from visualization_msgs.msg import ImageMarker
+from std_msgs.msg import ColorRGBA
+from geometry_msgs.msg import Point
 from nicepynode import Job, JobCfg
 from onnx_yolov5_ros.processing import letterbox, non_max_suppression, scale_coords
 
@@ -27,6 +30,7 @@ class YoloV5Cfg(JobCfg):
 
     frames_in_topic: str = "~/frames_in"
     preds_out_topic: str = "~/preds_out"
+    markers_topic: str = "~/bbox_markers"
 
     onnx_providers: list[str] = field(
         default_factory=lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"]
@@ -52,6 +56,7 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
             Image, cfg.frames_in_topic, self._on_input, 30
         )
         self._pred_pub = node.create_publisher(Pred2D, cfg.preds_out_topic, 30)
+        self._marker_pub = node.create_publisher(ImageMarkerArray, cfg.markers_topic, 1)
 
         self._init_model(cfg)
 
@@ -59,6 +64,7 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
         super().detach_behaviour(node)
         node.destroy_publisher(self._pred_pub)
         node.destroy_subscription(self._frames_sub)
+        node.destroy_publisher(self._marker_pub)
         # ONNX Runtime has no python API for destroying a Session
         # So I assume the GC will auto-handle it (based on its C API)
 
@@ -130,15 +136,35 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
         if 0 in img.shape:
             return
 
-        dets = self._forward(img)
+        dets = self._forward(img).astype(float)  # ROS2 msgs are too type-sensitive
 
         for det in dets:
             pred = Pred2D()
             pred.header = msg.header
             pred.pred = BBox2D(is_norm=False, type=BBox2D.XYXY, box=det[:4])
-            pred.score = float(det[4])
+            pred.score = det[4]
             pred.label = self.label_map[int(det[5])]
             self._pred_pub.publish(pred)
+
+        self._marker_pub.publish(
+            ImageMarkerArray(
+                markers=[
+                    ImageMarker(
+                        header=msg.header,
+                        scale=1.0,
+                        type=ImageMarker.POLYGON,
+                        outline_color=ColorRGBA(r=1.0, a=1.0),
+                        points=[
+                            Point(x=det[0], y=det[1]),
+                            Point(x=det[2], y=det[1]),
+                            Point(x=det[2], y=det[3]),
+                            Point(x=det[0], y=det[3]),
+                        ],
+                    )
+                    for det in dets
+                ]
+            )
+        )
 
 
 def main(args=None):
