@@ -126,6 +126,7 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
         self.log.info("ONNX initialized")
 
     def _forward(self, img):
+        # self.log.info(f"Shape: {img.shape}")
         x = np.stack(
             (
                 letterbox(
@@ -148,7 +149,11 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
         return dets
 
     def _on_input(self, msg: Image):
-        if self._pred_pub.get_subscription_count() < 1:
+        if (
+            self._pred_pub.get_subscription_count()
+            + self._marker_pub.get_subscription_count()
+            < 1
+        ):
             return
         if self.cfg.accept_compression:
             img = cv_bridge.compressed_imgmsg_to_cv2(msg, "rgb8")
