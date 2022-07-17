@@ -1,16 +1,18 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 import sys
+from copy import copy
 from ast import literal_eval
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSPresetProfiles
 from cv_bridge import CvBridge
 
 import numpy as np
 from onnxruntime import InferenceSession
 
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, CompressedImage
 from nicefaces.msg import BBox2D, Pred2D, Pred2DArray
 from foxglove_msgs.msg import ImageMarkerArray
 from visualization_msgs.msg import ImageMarker
@@ -22,6 +24,10 @@ from onnx_yolov5_ros.processing import letterbox, non_max_suppression, scale_coo
 NODE_NAME = "yolov5_model"
 
 cv_bridge = CvBridge()
+
+# Realtime Profile: don't bog down publisher when model is slow
+rt_profile = copy(QoSPresetProfiles.SENSOR_DATA.value)
+rt_profile.depth = 0
 
 
 @dataclass
@@ -36,6 +42,8 @@ class YoloV5Cfg(JobCfg):
         default_factory=lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"]
     )
     img_hw: tuple[int, int] = (640, 640)
+    accept_compression: bool = False
+    """Only necessary for 4K. Before that, performance hit from compression > bandwidth hit."""
 
 
 @dataclass
@@ -53,10 +61,13 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
         super(YoloV5Predictor, self).attach_behaviour(node, cfg)
 
         self._frames_sub = node.create_subscription(
-            Image, cfg.frames_in_topic, self._on_input, 30
+            CompressedImage if cfg.accept_compression else Image,
+            cfg.frames_in_topic,
+            self._on_input,
+            rt_profile,
         )
-        self._pred_pub = node.create_publisher(Pred2DArray, cfg.preds_out_topic, 30)
-        self._marker_pub = node.create_publisher(ImageMarkerArray, cfg.markers_topic, 1)
+        self._pred_pub = node.create_publisher(Pred2DArray, cfg.preds_out_topic, 5)
+        self._marker_pub = node.create_publisher(ImageMarkerArray, cfg.markers_topic, 5)
 
         self._init_model(cfg)
 
@@ -132,8 +143,10 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
     def _on_input(self, msg: Image):
         if self._pred_pub.get_subscription_count() < 1:
             return
-
-        img = cv_bridge.imgmsg_to_cv2(msg, "rgb8")
+        if self.cfg.accept_compression:
+            img = cv_bridge.compressed_imgmsg_to_cv2(msg, "rgb8")
+        else:
+            img = cv_bridge.imgmsg_to_cv2(msg, "rgb8")
         if 0 in img.shape:
             return
 
@@ -182,7 +195,7 @@ def main(args=None):
 
     node = Node(NODE_NAME)
 
-    cfg = YoloV5Cfg(rate=120)
+    cfg = YoloV5Cfg()
     YoloV5Predictor(node, cfg)
 
     rclpy.spin(node)
