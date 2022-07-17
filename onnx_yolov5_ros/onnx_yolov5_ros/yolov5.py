@@ -29,21 +29,38 @@ cv_bridge = CvBridge()
 rt_profile = copy(QoSPresetProfiles.SENSOR_DATA.value)
 rt_profile.depth = 0
 
+# TODO: why does rosbridge crash when the node gets restarted?
+
 
 @dataclass
 class YoloV5Cfg(JobCfg):
-    model_path: str = "/code/models/yolov7-w6.onnx"
-
+    # TODO: Model selection API?
+    model_path: str = "/code/models/yolov5n.onnx"
+    """Local path of model."""
     frames_in_topic: str = "~/frames_in"
+    """Video frames to predict on."""
     preds_out_topic: str = "~/preds_out"
-    markers_topic: str = "~/bbox_markers"
-
+    """Output topic for predictions."""
+    markers_out_topic: str = "~/bbox_markers"
+    """Output topic for visualization markers."""
     onnx_providers: list[str] = field(
         default_factory=lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"]
     )
+    """ONNX runtime providers."""
+    # TODO: img_hw should be embedded within exported model metadata
     img_hw: tuple[int, int] = (640, 640)
+    """Input resolution."""
     accept_compression: bool = False
     """Only necessary for 4K. Before that, performance hit from compression > bandwidth hit."""
+    # NOTE: increasing score_threshold & lowering nms_threshold will reduce lag
+    score_threshold: float = 0.2
+    """Minimum confidence level for filtering."""
+    nms_threshold: float = 0.75
+    """IoU threshold for non-maximum suppression."""
+    # TODO: class_exclude option
+    class_include: str = "['person']"
+    """Which classes to include, leave empty to include all."""
+    # TODO: resizing behaviour option e.g. contain, fill, stretch, tile (sliding window)
 
 
 @dataclass
@@ -54,8 +71,16 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
     def attach_params(self, node: Node, cfg: YoloV5Cfg):
         super(YoloV5Predictor, self).attach_params(node, cfg)
 
+        node.declare_parameter("model_path", cfg.model_path)
         node.declare_parameter("frames_in_topic", cfg.frames_in_topic)
         node.declare_parameter("preds_out_topic", cfg.preds_out_topic)
+        node.declare_parameter("markers_out_topic", cfg.markers_out_topic)
+        # onnx_providers is hardcoded
+        # img_hw is hardcoded
+        node.declare_parameter("accept_compression", cfg.accept_compression)
+        node.declare_parameter("score_threshold", cfg.score_threshold)
+        node.declare_parameter("nms_threshold", cfg.nms_threshold)
+        node.declare_parameter("class_include", cfg.class_include)
 
     def attach_behaviour(self, node: Node, cfg: YoloV5Cfg):
         super(YoloV5Predictor, self).attach_behaviour(node, cfg)
@@ -67,7 +92,9 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
             rt_profile,
         )
         self._pred_pub = node.create_publisher(Pred2DArray, cfg.preds_out_topic, 5)
-        self._marker_pub = node.create_publisher(ImageMarkerArray, cfg.markers_topic, 5)
+        self._marker_pub = node.create_publisher(
+            ImageMarkerArray, cfg.markers_out_topic, 5
+        )
 
         self._init_model(cfg)
 
@@ -81,14 +108,33 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
 
     def on_params_change(self, node: Node, changes: dict):
         self.log.info(f"Config changed: {changes}.")
-        if any(n in changes for n in ("frames_in_topic", "preds_out_topic")):
+        if not all(
+            n in ("score_threshold", "nms_threshold", "class_include") for n in changes
+        ):
             self.log.info(f"Config change requires restart.")
             return True
+        # force recalculation of included classes
+        if "class_include" in changes:
+            self._clsid_include = None
         return False
 
     def step(self, delta: float):
         # Unused for this node
         return super().step(delta)
+
+    @property
+    def clsid_include(self):
+        if self._clsid_include is None:
+            try:
+                include = literal_eval(self.cfg.class_include)
+                self._clsid_include = [
+                    self.label_map.index(c) for c in include if c in self.label_map
+                ]
+            except:
+                self.log.warn(f"Invalid class_include: {self.cfg.class_include}")
+                self._clsid_include = []
+
+        return self._clsid_include
 
     def _init_model(self, cfg: YoloV5Cfg):
         self.log.info("Initializing ONNX...")
@@ -100,6 +146,8 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
         # these details were added by the YoloV5 toolkit
         model_details = self.metadata.custom_metadata_map
         self.log.info(f"Model Info: {self.metadata.custom_metadata_map}")
+
+        # YoloV7 toolkit does not add model_details
         if not model_details:
             self.log.warn("Model Metadata Empty! Assuming default COCO YOLO model...")
             self.stride = 64
@@ -107,22 +155,11 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
                 "['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket', 'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch', 'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop', 'mouse', 'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush']"
             )
         else:
-            # TODO: imghw is fixed & should be read from metadata
-            # imghw config option should be replaced with resizing behaviour
-            # examples: contain, fill, stretch, tile (sliding window)
             self.stride = int(model_details["stride"])
-            # YoloV5 has a security vulnerability where it doesnt store the label_map
-            # as valid JSON, instead opting to use eval() to load it
-            # Partially mitigated here by using literal_eval instead
+            # bad design choice by YOLOv5 toolkit, we can only mitigate it...
             self.label_map: list = literal_eval(model_details["names"])
 
-        # temporary until we figure out a better way to handle this
-        self.class_include = ["person"]
-        self.confidence = 0.5
-        self.nms = 0.9
-        self._classes = [
-            self.label_map.index(c) for c in self.class_include if c in self.label_map
-        ]
+        self._clsid_include = None
         self.log.info("ONNX initialized")
 
     def _forward(self, img):
@@ -142,7 +179,12 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
         )[
             0
         ]  # output #0: (N, CONCAT, 85)
-        dets = non_max_suppression(y, self.confidence, self.nms, self._classes)[
+        dets = non_max_suppression(
+            y,
+            self.cfg.score_threshold,
+            self.cfg.nms_threshold,
+            self.clsid_include if len(self.clsid_include) else None,
+        )[
             0
         ]  # [N * (D, 6)] XYXY, CONF, CLS; get only 0th image given batchsize=1
         dets[:, :4] = scale_coords(self.cfg.img_hw, img.shape, dets[:, :4])
