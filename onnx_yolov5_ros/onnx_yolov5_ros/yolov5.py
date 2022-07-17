@@ -32,7 +32,7 @@ rt_profile.depth = 0
 
 @dataclass
 class YoloV5Cfg(JobCfg):
-    model_path: str = "/code/yolov5m6.onnx"
+    model_path: str = "/code/models/yolov7-w6.onnx"
 
     frames_in_topic: str = "~/frames_in"
     preds_out_topic: str = "~/preds_out"
@@ -100,14 +100,21 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
         # these details were added by the YoloV5 toolkit
         model_details = self.metadata.custom_metadata_map
         self.log.info(f"Model Info: {self.metadata.custom_metadata_map}")
-        # TODO: imghw is fixed & should be read from metadata
-        # imghw config option should be replaced with resizing behaviour
-        # examples: contain, fill, stretch, tile (sliding window)
-        self.stride = int(model_details["stride"])
-        # YoloV5 has a security vulnerability where it doesnt store the label_map
-        # as valid JSON, instead opting to use eval() to load it
-        # Partially mitigated here by using literal_eval instead
-        self.label_map: list = literal_eval(model_details["names"])
+        if not model_details:
+            self.log.warn("Model Metadata Empty! Assuming default COCO YOLO model...")
+            self.stride = 64
+            self.label_map = literal_eval(
+                "['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket', 'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch', 'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop', 'mouse', 'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush']"
+            )
+        else:
+            # TODO: imghw is fixed & should be read from metadata
+            # imghw config option should be replaced with resizing behaviour
+            # examples: contain, fill, stretch, tile (sliding window)
+            self.stride = int(model_details["stride"])
+            # YoloV5 has a security vulnerability where it doesnt store the label_map
+            # as valid JSON, instead opting to use eval() to load it
+            # Partially mitigated here by using literal_eval instead
+            self.label_map: list = literal_eval(model_details["names"])
 
         # temporary until we figure out a better way to handle this
         self.class_include = ["person"]
