@@ -29,7 +29,7 @@ cv_bridge = CvBridge()
 rt_profile = copy(QoSPresetProfiles.SENSOR_DATA.value)
 rt_profile.depth = 0
 
-# TODO: why does rosbridge crash when the node gets restarted?
+# TODO: why does rosbridge crash when this node restarts?
 
 
 @dataclass
@@ -47,20 +47,25 @@ class YoloV5Cfg(JobCfg):
         default_factory=lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"]
     )
     """ONNX runtime providers."""
-    # TODO: img_hw should be embedded within exported model metadata
-    img_hw: tuple[int, int] = (640, 640)
+    # TODO: img_wh should be embedded within exported model metadata
+    img_wh: tuple[int, int] = (640, 640)
     """Input resolution."""
     accept_compression: bool = False
     """Only necessary for 4K. Before that, performance hit from compression > bandwidth hit."""
-    # NOTE: increasing score_threshold & lowering nms_threshold will reduce lag
+    # NOTE: increasing score_threshold & lowering nms_threshold reduces lag
     score_threshold: float = 0.2
     """Minimum confidence level for filtering."""
     nms_threshold: float = 0.75
     """IoU threshold for non-maximum suppression."""
+    # NOTE: filtering out classes reduces lag
     # TODO: class_exclude option
     class_include: str = "['person']"
     """Which classes to include, leave empty to include all."""
     # TODO: resizing behaviour option e.g. contain, fill, stretch, tile (sliding window)
+    # TODO: config options for bbox output format such as:
+    #  - points vs bbox
+    #  - normalized or not
+    #  - bbox type, XYXY vs XYWH vs CBOX
 
 
 @dataclass
@@ -76,7 +81,7 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
         node.declare_parameter("preds_out_topic", cfg.preds_out_topic)
         node.declare_parameter("markers_out_topic", cfg.markers_out_topic)
         # onnx_providers is hardcoded
-        # img_hw is hardcoded
+        # img_wh is hardcoded
         node.declare_parameter("accept_compression", cfg.accept_compression)
         node.declare_parameter("score_threshold", cfg.score_threshold)
         node.declare_parameter("nms_threshold", cfg.nms_threshold)
@@ -167,7 +172,7 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
         x = np.stack(
             (
                 letterbox(
-                    img, new_shape=self.cfg.img_hw, stride=self.stride, auto=False
+                    img, new_shape=self.cfg.img_wh, stride=self.stride, auto=False
                 )[0],
             ),
             0,
@@ -187,7 +192,7 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
         )[
             0
         ]  # [N * (D, 6)] XYXY, CONF, CLS; get only 0th image given batchsize=1
-        dets[:, :4] = scale_coords(self.cfg.img_hw, img.shape, dets[:, :4])
+        dets[:, :4] = scale_coords(self.cfg.img_wh, img.shape[1::-1], dets[:, :4])
         return dets
 
     def _on_input(self, msg: Image):

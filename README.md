@@ -14,6 +14,6 @@ TODO: rename to onnx_yolo_ros
 
 Why? Because implementation language & deep learning framework aside, the pre & post-processing code for YOLO models are largely the same between variants. Hence, once the model is exported/standardized to ONNX, it is possible to just swap which YOLO model you want to use. For example, from YOLOv5 to YOLOv4 or even YOLOv7.
 
-## TODO
+## Note
 
-Should we write a separate python onnxruntime library for nodes to inherit from? Does that go into ros-nice-node? Or is it not too extra because turns out sticking pre & post processing on a model is easy? Should we NOT use ros-nice-node? Maybe its a bad idea if you intend this packages to actually be used or standalone because ros-nice-node is too ambigious a dependency to ever be added to `rosdep` and I bet they hate it if you were to create a utilities package like this instead of being standalone...
+Whenever you see size or shape, it has been converted to be `(width, height)`. Be mindful that numpy images are still `(height, width, channel)`, so you might want to apply `img.shape[1::-1]`.

@@ -8,14 +8,16 @@ https://github.com/ultralytics/yolov5/blob/master/utils/general.py
 import numpy as np
 import cv2
 
+# TODO: document these, esp since you changed default shape from hw to wh
+
 
 def scale_coords(cur_shape, ori_shape, coords, ratio_pad=None):
     # if padding used is known
     if ratio_pad is None:
         gain = min(cur_shape[0] / ori_shape[0], cur_shape[1] / ori_shape[1])
         pad = (
-            (cur_shape[1] - ori_shape[1] * gain) / 2,
             (cur_shape[0] - ori_shape[0] * gain) / 2,
+            (cur_shape[1] - ori_shape[1] * gain) / 2,
         )
     else:
         gain = ratio_pad[0][0]
@@ -24,8 +26,8 @@ def scale_coords(cur_shape, ori_shape, coords, ratio_pad=None):
     coords[:, [0, 2]] -= pad[0]  # x padding
     coords[:, [1, 3]] -= pad[1]  # y padding
     coords[:, :4] /= gain
-    coords[:, [0, 2]] = coords[:, [0, 2]].clip(0, ori_shape[1])
-    coords[:, [1, 3]] = coords[:, [1, 3]].clip(0, ori_shape[0])
+    coords[:, [0, 2]] = coords[:, [0, 2]].clip(0, ori_shape[0])
+    coords[:, [1, 3]] = coords[:, [1, 3]].clip(0, ori_shape[1])
     return coords
 
 
@@ -148,30 +150,29 @@ def letterbox(
     stride=32,
 ):
     # Resize and pad image while meeting stride-multiple constraints
-    shape = im.shape[:2]  # current shape [height, width]
-    if isinstance(new_shape, int):
-        new_shape = (new_shape, new_shape)
+    oh, ow = im.shape[:2]  # current shape [height, width]
+    nw, nh = new_shape
 
     # Scale ratio (new / old)
-    r = min(new_shape[0] / shape[0], new_shape[1] / shape[1])
+    r = min(nw / ow, nh / oh)
     if not scaleup:  # only scale down, do not scale up (for better val mAP)
         r = min(r, 1.0)
 
     # Compute padding
     ratio = r, r  # width, height ratios
-    new_unpad = int(round(shape[1] * r)), int(round(shape[0] * r))
-    dw, dh = new_shape[1] - new_unpad[0], new_shape[0] - new_unpad[1]  # wh padding
+    new_unpad = round(ow * r), round(oh * r)
+    dw, dh = nw - new_unpad[0], nh - new_unpad[1]  # wh padding
     if auto:  # minimum rectangle
         dw, dh = np.mod(dw, stride), np.mod(dh, stride)  # wh padding
     elif scaleFill:  # stretch
         dw, dh = 0.0, 0.0
-        new_unpad = (new_shape[1], new_shape[0])
-        ratio = new_shape[1] / shape[1], new_shape[0] / shape[0]  # width, height ratios
+        new_unpad = (nw, nh)
+        ratio = (nw / ow, nh / oh)  # width, height ratios
 
     dw /= 2  # divide padding into 2 sides
     dh /= 2
 
-    if shape[::-1] != new_unpad:  # resize
+    if (ow, oh) != new_unpad:  # resize
         im = cv2.resize(im, new_unpad, interpolation=cv2.INTER_LINEAR)
     top, bottom = int(round(dh - 0.1)), int(round(dh + 0.1))
     left, right = int(round(dw - 0.1)), int(round(dw + 0.1))
