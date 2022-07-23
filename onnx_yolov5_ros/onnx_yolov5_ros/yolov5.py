@@ -13,7 +13,7 @@ import numpy as np
 from onnxruntime import InferenceSession
 
 from sensor_msgs.msg import Image, CompressedImage
-from nicefaces.msg import BBox2D, Pred2D, Pred2DArray
+from nicefaces.msg import BBox2D, ObjDet2D, ObjDet2DArray
 from foxglove_msgs.msg import ImageMarkerArray
 from visualization_msgs.msg import ImageMarker
 from std_msgs.msg import ColorRGBA
@@ -96,7 +96,7 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
             self._on_input,
             rt_profile,
         )
-        self._pred_pub = node.create_publisher(Pred2DArray, cfg.preds_out_topic, 5)
+        self._pred_pub = node.create_publisher(ObjDet2DArray, cfg.preds_out_topic, 5)
         self._marker_pub = node.create_publisher(
             ImageMarkerArray, cfg.markers_out_topic, 5
         )
@@ -202,48 +202,59 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
             < 1
         ):
             return
+
+        infer_start = self.get_timestamp()
+
         if self.cfg.accept_compression:
             img = cv_bridge.compressed_imgmsg_to_cv2(msg, "rgb8")
         else:
             img = cv_bridge.imgmsg_to_cv2(msg, "rgb8")
         if 0 in img.shape:
+            self.log.debug("Image has invalid shape!")
             return
 
         dets = self._forward(img).astype(float)  # ROS2 msgs are too type-sensitive
 
-        self._pred_pub.publish(
-            Pred2DArray(
-                preds=[
-                    Pred2D(
-                        header=msg.header,
-                        pred=BBox2D(is_norm=False, type=BBox2D.XYXY, box=det[:4]),
-                        score=det[4],
-                        label=self.label_map[int(det[5])],
-                    )
-                    for det in dets
-                ]
-            )
-        )
+        infer_end = self.get_timestamp()
 
-        self._marker_pub.publish(
-            ImageMarkerArray(
-                markers=[
-                    ImageMarker(
-                        header=msg.header,
-                        scale=1.0,
-                        type=ImageMarker.POLYGON,
-                        outline_color=ColorRGBA(r=1.0, a=1.0),
-                        points=[
-                            Point(x=det[0], y=det[1]),
-                            Point(x=det[2], y=det[1]),
-                            Point(x=det[2], y=det[3]),
-                            Point(x=det[0], y=det[3]),
-                        ],
-                    )
-                    for det in dets
-                ]
+        if self._pred_pub.get_subscription_count() > 0:
+            self._pred_pub.publish(
+                ObjDet2DArray(
+                    header=msg.header,
+                    dets=[
+                        ObjDet2D(
+                            header=msg.header,
+                            box=BBox2D(is_norm=False, type=BBox2D.XYXY, rect=det[:4]),
+                            score=det[4],
+                            label=self.label_map[int(det[5])],
+                        )
+                        for det in dets
+                    ],
+                    infer_start_time=infer_start,
+                    infer_end_time=infer_end,
+                )
             )
-        )
+
+        if self._marker_pub.get_subscription_count() > 0:
+            self._marker_pub.publish(
+                ImageMarkerArray(
+                    markers=[
+                        ImageMarker(
+                            header=msg.header,
+                            scale=1.0,
+                            type=ImageMarker.POLYGON,
+                            outline_color=ColorRGBA(r=1.0, a=1.0),
+                            points=[
+                                Point(x=det[0], y=det[1]),
+                                Point(x=det[2], y=det[1]),
+                                Point(x=det[2], y=det[3]),
+                                Point(x=det[0], y=det[3]),
+                            ],
+                        )
+                        for det in dets
+                    ]
+                )
+            )
 
 
 def main(args=None):
