@@ -10,7 +10,12 @@ from rclpy.qos import QoSPresetProfiles
 from cv_bridge import CvBridge
 
 import numpy as np
-from onnxruntime import InferenceSession
+from onnxruntime import (
+    InferenceSession,
+    SessionOptions,
+    ExecutionMode,
+    GraphOptimizationLevel,
+)
 
 from sensor_msgs.msg import Image, CompressedImage
 from nicefaces.msg import BBox2D, ObjDet2D, ObjDet2DArray
@@ -43,9 +48,7 @@ class YoloV5Cfg(JobCfg):
     """Output topic for predictions."""
     markers_out_topic: str = "~/bbox_markers"
     """Output topic for visualization markers."""
-    onnx_providers: list[str] = field(
-        default_factory=lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"]
-    )
+    onnx_providers: list[str] = field(default_factory=lambda: ["CUDAExecutionProvider"])
     """ONNX runtime providers."""
     # TODO: img_wh should be embedded within exported model metadata
     img_wh: tuple[int, int] = (640, 640)
@@ -143,8 +146,43 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
 
     def _init_model(self, cfg: YoloV5Cfg):
         self.log.info("Initializing ONNX...")
+
+        # Tuning Guide: https://github.com/microsoft/onnxruntime-openenclave/blob/openenclave-public/docs/ONNX_Runtime_Perf_Tuning.md
+        # and https://onnxruntime.ai/docs/performance/tune-performance.html
+        sess_opts = SessionOptions()
+        # opts.enable_profiling = True
+        sess_opts.enable_mem_pattern = True  # is default
+        sess_opts.enable_mem_reuse = True  # is default
+        sess_opts.execution_mode = ExecutionMode.ORT_PARALLEL  # does nothing on CUDA
+        sess_opts.intra_op_num_threads = 2  # does nothing on CUDA
+        sess_opts.inter_op_num_threads = 2  # does nothing on CUDA
+        sess_opts.graph_optimization_level = (
+            GraphOptimizationLevel.ORT_ENABLE_ALL
+        )  # is default
+
+        # CUDAExecutionProvider Options: https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html
+        provider_opts = [
+            dict(
+                device_id=0,
+                gpu_mem_limit=2 * 1024 ** 3,
+                arena_extend_strategy="kSameAsRequested",
+                do_copy_in_default_stream=False,
+                cudnn_conv_use_max_workspace=True,
+                cudnn_conv1d_pad_to_nc1d=True,
+                cudnn_conv_algo_search="EXHAUSTIVE",
+                # enable_cuda_graph=True,
+            )
+        ]
+
         self.log.info(f"Model Path: {cfg.model_path}")
-        self.session = InferenceSession(cfg.model_path, providers=cfg.onnx_providers)
+        self.session = InferenceSession(
+            cfg.model_path,
+            providers=cfg.onnx_providers,
+            # performance gains measured to be negligable...
+            sess_options=sess_opts,
+            provider_options=provider_opts,
+        )
+        # self.log.info(f"Options: {self.session.get_provider_options()}")
         # https://onnxruntime.ai/docs/api/python/api_summary.html#modelmetadata
         self.metadata = self.session.get_modelmeta()
 
@@ -261,16 +299,20 @@ def main(args=None):
     if __name__ == "__main__" and args is None:
         args = sys.argv
 
-    rclpy.init(args=args)
+    try:
+        rclpy.init(args=args)
 
-    node = Node(NODE_NAME)
+        node = Node(NODE_NAME)
 
-    cfg = YoloV5Cfg()
-    YoloV5Predictor(node, cfg)
+        cfg = YoloV5Cfg()
+        YoloV5Predictor(node, cfg)
 
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
 
 
 if __name__ == "__main__":
