@@ -185,6 +185,8 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
         # self.log.info(f"Options: {self.session.get_provider_options()}")
         # https://onnxruntime.ai/docs/api/python/api_summary.html#modelmetadata
         self.metadata = self.session.get_modelmeta()
+        self._sess_out_name = self.session.get_outputs()[0].name
+        self._sess_in_name = self.session.get_inputs()[0].name
 
         # these details were added by the YoloV5 toolkit
         model_details = self.metadata.custom_metadata_map
@@ -217,11 +219,9 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
         )  # NHWC, RGB, float32
         x = (x / 255).transpose(0, 3, 1, 2).astype(np.float32)  # NCHW, RGB
 
-        y = self.session.run(
-            [self.session.get_outputs()[0].name], {self.session.get_inputs()[0].name: x}
-        )[
-            0
-        ]  # output #0: (N, CONCAT, 85)
+        # output #0: (N, CONCAT, 85)
+        y = self.session.run([self._sess_out_name], {self._sess_in_name: x})[0]
+
         dets = non_max_suppression(
             y,
             self.cfg.score_threshold,
