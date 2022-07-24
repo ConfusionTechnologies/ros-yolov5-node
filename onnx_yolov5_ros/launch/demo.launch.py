@@ -25,6 +25,7 @@ def generate_launch_description():
             ("~/frames_in", "/rtc/rtc_receiver/frames_out"),
             ("~/preds_out", "/data_out"),
         ],
+        respawn=True,
     )
 
     aiortc_cfg = IncludeLaunchDescription(
@@ -34,5 +35,5 @@ def generate_launch_description():
         launch_arguments=[("namespace", "/rtc")],
     )
 
-    return LaunchDescription([aiortc_cfg, yolov5_node])
+    return LaunchDescription([yolov5_node, aiortc_cfg])
 
