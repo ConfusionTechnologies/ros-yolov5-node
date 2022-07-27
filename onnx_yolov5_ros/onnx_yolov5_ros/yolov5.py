@@ -7,6 +7,7 @@ from ast import literal_eval
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSPresetProfiles
+from ros2topic.api import get_msg_class
 from cv_bridge import CvBridge
 
 import numpy as np
@@ -17,7 +18,7 @@ from onnxruntime import (
     GraphOptimizationLevel,
 )
 
-from sensor_msgs.msg import Image, CompressedImage
+from sensor_msgs.msg import Image
 from nicefaces.msg import BBox2D, ObjDet2D, ObjDet2DArray
 from foxglove_msgs.msg import ImageMarkerArray
 from visualization_msgs.msg import ImageMarker
@@ -31,8 +32,33 @@ NODE_NAME = "yolov5_model"
 cv_bridge = CvBridge()
 
 # Realtime Profile: don't bog down publisher when model is slow
-rt_profile = copy(QoSPresetProfiles.SENSOR_DATA.value)
-rt_profile.depth = 0
+RT_PROFILE = copy(QoSPresetProfiles.SENSOR_DATA.value)
+RT_PROFILE.depth = 0
+
+# Tuning Guide: https://github.com/microsoft/onnxruntime-openenclave/blob/openenclave-public/docs/ONNX_Runtime_Perf_Tuning.md
+# and https://onnxruntime.ai/docs/performance/tune-performance.html
+SESS_OPTS = SessionOptions()
+# opts.enable_profiling = True
+SESS_OPTS.enable_mem_pattern = True  # is default
+SESS_OPTS.enable_mem_reuse = True  # is default
+SESS_OPTS.execution_mode = ExecutionMode.ORT_PARALLEL  # does nothing on CUDA
+SESS_OPTS.intra_op_num_threads = 2  # does nothing on CUDA
+SESS_OPTS.inter_op_num_threads = 2  # does nothing on CUDA
+SESS_OPTS.graph_optimization_level = GraphOptimizationLevel.ORT_ENABLE_ALL  # is defaul
+# CUDAExecutionProvider Options: https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html
+PROVIDER_OPTS = [
+    dict(
+        device_id=0,
+        gpu_mem_limit=2 * 1024 ** 3,
+        arena_extend_strategy="kSameAsRequested",
+        do_copy_in_default_stream=False,
+        cudnn_conv_use_max_workspace=True,
+        cudnn_conv1d_pad_to_nc1d=True,
+        cudnn_conv_algo_search="EXHAUSTIVE",
+        # enable_cuda_graph=True,
+    )
+]
+
 
 # TODO: why does rosbridge crash when this node restarts?
 
@@ -53,8 +79,6 @@ class YoloV5Cfg(JobCfg):
     # TODO: img_wh should be embedded within exported model metadata
     img_wh: tuple[int, int] = (640, 640)
     """Input resolution."""
-    accept_compression: bool = False
-    """Only necessary for 4K. Before that, performance hit from compression > bandwidth hit."""
     # NOTE: increasing score_threshold & lowering nms_threshold reduces lag
     score_threshold: float = 0.2
     """Minimum confidence level for filtering."""
@@ -85,7 +109,6 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
         node.declare_parameter("markers_out_topic", cfg.markers_out_topic)
         # onnx_providers is hardcoded
         # img_wh is hardcoded
-        node.declare_parameter("accept_compression", cfg.accept_compression)
         node.declare_parameter("score_threshold", cfg.score_threshold)
         node.declare_parameter("nms_threshold", cfg.nms_threshold)
         node.declare_parameter("class_include", cfg.class_include)
@@ -93,18 +116,22 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
     def attach_behaviour(self, node: Node, cfg: YoloV5Cfg):
         super(YoloV5Predictor, self).attach_behaviour(node, cfg)
 
+        self._init_model(cfg)
+
+        # TODO: make this isomorphic realtime image subscriber a utility
+        self.log.info(f"Waiting for publisher@{cfg.frames_in_topic}...")
         self._frames_sub = node.create_subscription(
-            CompressedImage if cfg.accept_compression else Image,
+            # blocks until image publisher is up!
+            get_msg_class(node, cfg.frames_in_topic, blocking=True),
             cfg.frames_in_topic,
             self._on_input,
-            rt_profile,
+            RT_PROFILE,
         )
         self._pred_pub = node.create_publisher(ObjDet2DArray, cfg.preds_out_topic, 5)
         self._marker_pub = node.create_publisher(
             ImageMarkerArray, cfg.markers_out_topic, 5
         )
-
-        self._init_model(cfg)
+        self.log.info("Ready")
 
     def detach_behaviour(self, node: Node):
         super().detach_behaviour(node)
@@ -147,40 +174,13 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
     def _init_model(self, cfg: YoloV5Cfg):
         self.log.info("Initializing ONNX...")
 
-        # Tuning Guide: https://github.com/microsoft/onnxruntime-openenclave/blob/openenclave-public/docs/ONNX_Runtime_Perf_Tuning.md
-        # and https://onnxruntime.ai/docs/performance/tune-performance.html
-        sess_opts = SessionOptions()
-        # opts.enable_profiling = True
-        sess_opts.enable_mem_pattern = True  # is default
-        sess_opts.enable_mem_reuse = True  # is default
-        sess_opts.execution_mode = ExecutionMode.ORT_PARALLEL  # does nothing on CUDA
-        sess_opts.intra_op_num_threads = 2  # does nothing on CUDA
-        sess_opts.inter_op_num_threads = 2  # does nothing on CUDA
-        sess_opts.graph_optimization_level = (
-            GraphOptimizationLevel.ORT_ENABLE_ALL
-        )  # is default
-
-        # CUDAExecutionProvider Options: https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html
-        provider_opts = [
-            dict(
-                device_id=0,
-                gpu_mem_limit=2 * 1024 ** 3,
-                arena_extend_strategy="kSameAsRequested",
-                do_copy_in_default_stream=False,
-                cudnn_conv_use_max_workspace=True,
-                cudnn_conv1d_pad_to_nc1d=True,
-                cudnn_conv_algo_search="EXHAUSTIVE",
-                # enable_cuda_graph=True,
-            )
-        ]
-
         self.log.info(f"Model Path: {cfg.model_path}")
         self.session = InferenceSession(
             cfg.model_path,
             providers=cfg.onnx_providers,
             # performance gains measured to be negligable...
-            sess_options=sess_opts,
-            provider_options=provider_opts,
+            sess_options=SESS_OPTS,
+            provider_options=PROVIDER_OPTS,
         )
         # self.log.info(f"Options: {self.session.get_provider_options()}")
         # https://onnxruntime.ai/docs/api/python/api_summary.html#modelmetadata
@@ -194,6 +194,7 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
 
         # YoloV7 toolkit does not add model_details
         if not model_details:
+            # TODO: THESE ARE HARDCODED ASSUMPTIONS
             self.log.warn("Model Metadata Empty! Assuming default COCO YOLO model...")
             self.stride = 64
             self.label_map = literal_eval(
@@ -243,10 +244,10 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
 
         infer_start = self.get_timestamp()
 
-        if self.cfg.accept_compression:
-            img = cv_bridge.compressed_imgmsg_to_cv2(msg, "rgb8")
-        else:
+        if isinstance(msg, Image):
             img = cv_bridge.imgmsg_to_cv2(msg, "rgb8")
+        else:
+            img = cv_bridge.compressed_imgmsg_to_cv2(msg, "rgb8")
         if 0 in img.shape:
             self.log.debug("Image has invalid shape!")
             return

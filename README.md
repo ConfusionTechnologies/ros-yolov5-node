@@ -10,9 +10,11 @@ For ROS2, uses ONNX GPU Runtime (Python SDK) to inference YOLOv5.
 
 ## Interesting
 
-TODO: rename to onnx_yolo_ros
+Rename to onnx_yolo_ros?
 
 Why? Because implementation language & deep learning framework aside, the pre & post-processing code for YOLO models are largely the same between variants. Hence, once the model is exported/standardized to ONNX, it is possible to just swap which YOLO model you want to use. For example, from YOLOv5 to YOLOv4 or even YOLOv7.
+
+That said, I have yet to thoroughly test the above. Even more so given YOLOv7 heavily uses YOLOv5's codebase. Separate implementations might be needed for different variant "generations".
 
 ## Note
 

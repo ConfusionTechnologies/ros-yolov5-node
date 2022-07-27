@@ -21,9 +21,16 @@ def generate_launch_description():
         executable="yolov5",
         name="yolov5",
         # equivalent to --remap yolov5/frames_in:=/rtc/rtc_receiver/frames_out
-        remappings=[
-            ("~/frames_in", "/rtc/rtc_receiver/frames_out"),
-            ("~/preds_out", "/data_out"),
+        # remappings=[
+        #     ("~/frames_in", "/rtc/rtc_receiver/frames_out"),
+        #     ("~/preds_out", "/data_out"),
+        # ],
+        parameters=[
+            {
+                "model_path": "/code/models/yolov5m6.onnx",
+                "frames_in_topic": "/rtc/rtc_receiver/frames_out",
+                "preds_out_topic": "/data_out",
+            }
         ],
         respawn=True,
     )
@@ -35,5 +42,6 @@ def generate_launch_description():
         launch_arguments=[("namespace", "/rtc")],
     )
 
+    # NOTE: yolov5 node WILL wait for the image publisher!
     return LaunchDescription([yolov5_node, aiortc_cfg])
 
