@@ -66,7 +66,7 @@ PROVIDER_OPTS = [
 @dataclass
 class YoloV5Cfg(JobCfg):
     # TODO: Model selection API?
-    model_path: str = "/code/models/yolov5n.onnx"
+    model_path: str = "/models/yolov5s6.onnx"
     """Local path of model."""
     frames_in_topic: str = "~/frames_in"
     """Video frames to predict on."""
@@ -80,9 +80,9 @@ class YoloV5Cfg(JobCfg):
     img_wh: tuple[int, int] = (640, 640)
     """Input resolution."""
     # NOTE: increasing score_threshold & lowering nms_threshold reduces lag
-    score_threshold: float = 0.2
+    score_threshold: float = 0.4
     """Minimum confidence level for filtering."""
-    nms_threshold: float = 0.75
+    nms_threshold: float = 0.5
     """IoU threshold for non-maximum suppression."""
     # NOTE: filtering out classes reduces lag
     # TODO: class_exclude option
