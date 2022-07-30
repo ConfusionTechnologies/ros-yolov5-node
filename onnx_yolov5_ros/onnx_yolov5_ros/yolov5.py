@@ -19,10 +19,9 @@ from onnxruntime import (
 )
 
 from sensor_msgs.msg import Image
-from nicefaces.msg import BBox2D, ObjDet2D, ObjDet2DArray
+from nicefaces.msg import ObjDet2Ds, BBox2D
 from foxglove_msgs.msg import ImageMarkerArray
 from visualization_msgs.msg import ImageMarker
-from std_msgs.msg import ColorRGBA
 from geometry_msgs.msg import Point
 from nicepynode import Job, JobCfg
 from onnx_yolov5_ros.processing import letterbox, non_max_suppression, scale_coords
@@ -60,13 +59,13 @@ PROVIDER_OPTS = [
 ]
 
 
-# TODO: why does rosbridge crash when this node restarts?
+# TODO: rosbridge will crash when subscribed to this node when node restarts
 
 
 @dataclass
 class YoloV5Cfg(JobCfg):
     # TODO: Model selection API?
-    model_path: str = "/models/yolov5s6.onnx"
+    model_path: str = "/models/yolov5n6.onnx"
     """Local path of model."""
     frames_in_topic: str = "~/frames_in"
     """Video frames to predict on."""
@@ -127,7 +126,7 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
             self._on_input,
             RT_PROFILE,
         )
-        self._pred_pub = node.create_publisher(ObjDet2DArray, cfg.preds_out_topic, 5)
+        self._pred_pub = node.create_publisher(ObjDet2Ds, cfg.preds_out_topic, 5)
         self._marker_pub = node.create_publisher(
             ImageMarkerArray, cfg.markers_out_topic, 5
         )
@@ -152,10 +151,6 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
         if "class_include" in changes:
             self._clsid_include = None
         return False
-
-    def step(self, delta: float):
-        # Unused for this node
-        return super().step(delta)
 
     @property
     def clsid_include(self):
@@ -210,15 +205,11 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
 
     def _forward(self, img):
         # self.log.info(f"Shape: {img.shape}")
-        x = np.stack(
-            (
-                letterbox(
-                    img, new_shape=self.cfg.img_wh, stride=self.stride, auto=False
-                )[0],
-            ),
-            0,
-        )  # NHWC, RGB, float32
-        x = (x / 255).transpose(0, 3, 1, 2).astype(np.float32)  # NCHW, RGB
+        x = letterbox(img, new_shape=self.cfg.img_wh, stride=self.stride, auto=False)[
+            0  # (im, ratio, pad), take 0th element which is im
+        ][None].astype(np.float32)
+        # NHWC, RGB, float32
+        x = (x / 255).transpose(0, 3, 1, 2)  # NCHW, RGB
 
         # output #0: (N, CONCAT, 85)
         y = self.session.run([self._sess_out_name], {self._sess_in_name: x})[0]
@@ -252,48 +243,48 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
             self.log.debug("Image has invalid shape!")
             return
 
-        dets = self._forward(img).astype(float)  # ROS2 msgs are too type-sensitive
+        # (D, 6) XYXY, CONF, CLS
+        dets = self._forward(img)
 
         infer_end = self.get_timestamp()
 
         if self._pred_pub.get_subscription_count() > 0:
-            self._pred_pub.publish(
-                ObjDet2DArray(
-                    header=msg.header,
-                    dets=[
-                        ObjDet2D(
-                            header=msg.header,
-                            box=BBox2D(is_norm=False, type=BBox2D.XYXY, rect=det[:4]),
-                            score=det[4],
-                            label=self.label_map[int(det[5])],
-                        )
-                        for det in dets
-                    ],
-                    infer_start_time=infer_start,
-                    infer_end_time=infer_end,
-                )
-            )
+            detsmsg = ObjDet2Ds(header=msg.header)
+            detsmsg.profiling.infer_start_time = infer_start
+            detsmsg.profiling.infer_end_time = infer_end
+
+            detsmsg.boxes.header = msg.header
+            detsmsg.boxes.type = BBox2D.XYXY
+            detsmsg.boxes.is_norm = False
+
+            detsmsg.boxes.a.frombytes(dets[:, 0].tobytes())
+            detsmsg.boxes.b.frombytes(dets[:, 1].tobytes())
+            detsmsg.boxes.c.frombytes(dets[:, 2].tobytes())
+            detsmsg.boxes.d.frombytes(dets[:, 3].tobytes())
+
+            detsmsg.scores.frombytes(dets[:, 4].tobytes())
+            for i in dets[:, 5].astype(int):
+                detsmsg.labels.append(self.label_map[i])
+
+            self._pred_pub.publish(detsmsg)
 
         if self._marker_pub.get_subscription_count() > 0:
-            self._marker_pub.publish(
-                ImageMarkerArray(
-                    markers=[
-                        ImageMarker(
-                            header=msg.header,
-                            scale=1.0,
-                            type=ImageMarker.POLYGON,
-                            outline_color=ColorRGBA(r=1.0, a=1.0),
-                            points=[
-                                Point(x=det[0], y=det[1]),
-                                Point(x=det[2], y=det[1]),
-                                Point(x=det[2], y=det[3]),
-                                Point(x=det[0], y=det[3]),
-                            ],
-                        )
-                        for det in dets
-                    ]
+            markersmsg = ImageMarkerArray()
+            # must be float64 vs float32 for Point()...
+            for det in dets.astype(float):
+                marker = ImageMarker(header=msg.header)
+                marker.scale = 1.0
+                marker.type = ImageMarker.POLYGON
+                marker.outline_color.r = 1.0
+                marker.outline_color.a = 1.0
+                marker.points = (
+                    Point(x=det[0], y=det[1]),
+                    Point(x=det[2], y=det[1]),
+                    Point(x=det[2], y=det[3]),
+                    Point(x=det[0], y=det[3]),
                 )
-            )
+                markersmsg.markers.append(marker)
+            self._marker_pub.publish(markersmsg)
 
 
 def main(args=None):
