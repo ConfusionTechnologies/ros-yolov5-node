@@ -65,7 +65,7 @@ PROVIDER_OPTS = [
 @dataclass
 class YoloV5Cfg(JobCfg):
     # TODO: Model selection API?
-    model_path: str = "/models/yolov5n6.onnx"
+    model_path: str = "/models/yolov7-tiny.onnx"
     """Local path of model."""
     frames_in_topic: str = "~/frames_in"
     """Video frames to predict on."""
