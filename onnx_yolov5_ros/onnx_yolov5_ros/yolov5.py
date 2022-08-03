@@ -24,6 +24,7 @@ from foxglove_msgs.msg import ImageMarkerArray
 from visualization_msgs.msg import ImageMarker
 from geometry_msgs.msg import Point
 from nicepynode import Job, JobCfg
+from nicepynode.utils import declare_parameters_from_dataclass
 from onnx_yolov5_ros.processing import letterbox, non_max_suppression, scale_coords
 
 NODE_NAME = "yolov5_model"
@@ -85,7 +86,7 @@ class YoloV5Cfg(JobCfg):
     """IoU threshold for non-maximum suppression."""
     # NOTE: filtering out classes reduces lag
     # TODO: class_exclude option
-    class_include: str = "['person']"
+    class_include: list[str] = field(default_factory=lambda: ["person"])
     """Which classes to include, leave empty to include all."""
     # TODO: resizing behaviour option e.g. contain, fill, stretch, tile (sliding window)
     # TODO: config options for bbox output format such as:
@@ -102,15 +103,10 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
     def attach_params(self, node: Node, cfg: YoloV5Cfg):
         super(YoloV5Predictor, self).attach_params(node, cfg)
 
-        node.declare_parameter("model_path", cfg.model_path)
-        node.declare_parameter("frames_in_topic", cfg.frames_in_topic)
-        node.declare_parameter("preds_out_topic", cfg.preds_out_topic)
-        node.declare_parameter("markers_out_topic", cfg.markers_out_topic)
-        # onnx_providers is hardcoded
-        # img_wh is hardcoded
-        node.declare_parameter("score_threshold", cfg.score_threshold)
-        node.declare_parameter("nms_threshold", cfg.nms_threshold)
-        node.declare_parameter("class_include", cfg.class_include)
+        # onnx_providers & img_wh are hardcoded
+        declare_parameters_from_dataclass(
+            node, cfg, exclude_keys=["onnx_providers", "img_wh"]
+        )
 
     def attach_behaviour(self, node: Node, cfg: YoloV5Cfg):
         super(YoloV5Predictor, self).attach_behaviour(node, cfg)
@@ -155,14 +151,11 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
     @property
     def clsid_include(self):
         if self._clsid_include is None:
-            try:
-                include = literal_eval(self.cfg.class_include)
-                self._clsid_include = [
-                    self.label_map.index(c) for c in include if c in self.label_map
-                ]
-            except:
-                self.log.warn(f"Invalid class_include: {self.cfg.class_include}")
-                self._clsid_include = []
+            self._clsid_include = [
+                self.label_map.index(c)
+                for c in self.cfg.class_include
+                if c in self.label_map
+            ]
 
         return self._clsid_include
 
