@@ -1,12 +1,10 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 import sys
-from copy import copy
 from ast import literal_eval
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSPresetProfiles
 from ros2topic.api import get_msg_class
 from cv_bridge import CvBridge
 
@@ -24,16 +22,16 @@ from foxglove_msgs.msg import ImageMarkerArray
 from visualization_msgs.msg import ImageMarker
 from geometry_msgs.msg import Point
 from nicepynode import Job, JobCfg
-from nicepynode.utils import declare_parameters_from_dataclass
+from nicepynode.utils import (
+    declare_parameters_from_dataclass,
+    RT_PUB_PROFILE,
+    RT_SUB_PROFILE,
+)
 from onnx_yolov5_ros.processing import letterbox, non_max_suppression, scale_coords
 
 NODE_NAME = "yolov5_model"
 
 cv_bridge = CvBridge()
-
-# Realtime Profile: don't bog down publisher when model is slow
-RT_PROFILE = copy(QoSPresetProfiles.SENSOR_DATA.value)
-RT_PROFILE.depth = 0
 
 # Tuning Guide: https://github.com/microsoft/onnxruntime-openenclave/blob/openenclave-public/docs/ONNX_Runtime_Perf_Tuning.md
 # and https://onnxruntime.ai/docs/performance/tune-performance.html
@@ -58,9 +56,6 @@ PROVIDER_OPTS = [
         # enable_cuda_graph=True,
     )
 ]
-
-
-# TODO: rosbridge will crash when subscribed to this node when node restarts
 
 
 @dataclass
@@ -120,18 +115,20 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
             get_msg_class(node, cfg.frames_in_topic, blocking=True),
             cfg.frames_in_topic,
             self._on_input,
-            RT_PROFILE,
+            RT_SUB_PROFILE,
         )
-        self._pred_pub = node.create_publisher(ObjDet2Ds, cfg.preds_out_topic, 5)
+        self._pred_pub = node.create_publisher(
+            ObjDet2Ds, cfg.preds_out_topic, RT_PUB_PROFILE
+        )
         self._marker_pub = node.create_publisher(
-            ImageMarkerArray, cfg.markers_out_topic, 5
+            ImageMarkerArray, cfg.markers_out_topic, RT_PUB_PROFILE
         )
         self.log.info("Ready")
 
     def detach_behaviour(self, node: Node):
         super().detach_behaviour(node)
-        node.destroy_publisher(self._pred_pub)
         node.destroy_subscription(self._frames_sub)
+        node.destroy_publisher(self._pred_pub)
         node.destroy_publisher(self._marker_pub)
         # ONNX Runtime has no python API for destroying a Session
         # So I assume the GC will auto-handle it (based on its C API)
