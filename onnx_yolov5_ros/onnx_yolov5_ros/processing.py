@@ -6,7 +6,6 @@ whatever I deemed extraneous.
 https://github.com/ultralytics/yolov5/blob/master/utils/general.py
 """
 import numpy as np
-import cv2
 
 # TODO: document these, esp since you changed default shape from hw to wh
 
@@ -127,56 +126,3 @@ def non_max_suppression(
             i = i[:max_det]
         output[xi] = x[i]
     return output
-
-
-# ensure images fit input shape and stride requirements
-# btw img size must be multiple of stride in both directions
-# for example:
-# # imgs is array of cv2 imread HWC BGR images
-# batch = np.stack([letterbox(x)[0] for x in imgs], 0)
-# batch[..., ::-1].transpose(0, 3, 1, 2) # NCHW, RGB
-# (dw, dh) is size of padding (one side-only so need x2)
-# ratio (also w, h) is resizing ratio
-# above 2 are needed to reconstruct the original image
-# they are hence useless
-# taken from https://github.com/ultralytics/yolov5/blob/master/utils/augmentations.py
-def letterbox(
-    im,
-    new_shape=(640, 640),
-    color=(114, 114, 114),
-    auto=True,
-    scaleFill=False,
-    scaleup=True,
-    stride=32,
-):
-    # Resize and pad image while meeting stride-multiple constraints
-    oh, ow = im.shape[:2]  # current shape [height, width]
-    nw, nh = new_shape
-
-    # Scale ratio (new / old)
-    r = min(nw / ow, nh / oh)
-    if not scaleup:  # only scale down, do not scale up (for better val mAP)
-        r = min(r, 1.0)
-
-    # Compute padding
-    ratio = r, r  # width, height ratios
-    new_unpad = round(ow * r), round(oh * r)
-    dw, dh = nw - new_unpad[0], nh - new_unpad[1]  # wh padding
-    if auto:  # minimum rectangle
-        dw, dh = np.mod(dw, stride), np.mod(dh, stride)  # wh padding
-    elif scaleFill:  # stretch
-        dw, dh = 0.0, 0.0
-        new_unpad = (nw, nh)
-        ratio = (nw / ow, nh / oh)  # width, height ratios
-
-    dw /= 2  # divide padding into 2 sides
-    dh /= 2
-
-    if (ow, oh) != new_unpad:  # resize
-        im = cv2.resize(im, new_unpad, interpolation=cv2.INTER_LINEAR)
-    top, bottom = int(round(dh - 0.1)), int(round(dh + 0.1))
-    left, right = int(round(dw - 0.1)), int(round(dw + 0.1))
-    im = cv2.copyMakeBorder(
-        im, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color
-    )  # add border
-    return im, ratio, (dw, dh)

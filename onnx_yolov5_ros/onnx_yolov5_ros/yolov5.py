@@ -1,33 +1,34 @@
 from __future__ import annotations
-from dataclasses import dataclass, field
+
 import sys
 from ast import literal_eval
-
-import rclpy
-from rclpy.node import Node
-from ros2topic.api import get_msg_class
-from cv_bridge import CvBridge
+from dataclasses import dataclass, field
 
 import numpy as np
-from onnxruntime import (
-    InferenceSession,
-    SessionOptions,
-    ExecutionMode,
-    GraphOptimizationLevel,
-)
-
-from sensor_msgs.msg import Image
-from nicefaces.msg import ObjDet2Ds, BBox2D
+import rclpy
+from cv_bridge import CvBridge
 from foxglove_msgs.msg import ImageMarkerArray
-from visualization_msgs.msg import ImageMarker
 from geometry_msgs.msg import Point
+from nicefaces.msg import BBox2D, ObjDet2Ds
 from nicepynode import Job, JobCfg
 from nicepynode.utils import (
-    declare_parameters_from_dataclass,
     RT_PUB_PROFILE,
     RT_SUB_PROFILE,
+    declare_parameters_from_dataclass,
+    letterbox,
 )
-from onnx_yolov5_ros.processing import letterbox, non_max_suppression, scale_coords
+from onnxruntime import (
+    ExecutionMode,
+    GraphOptimizationLevel,
+    InferenceSession,
+    SessionOptions,
+)
+from rclpy.node import Node
+from ros2topic.api import get_msg_class
+from sensor_msgs.msg import Image
+from visualization_msgs.msg import ImageMarker
+
+from onnx_yolov5_ros.processing import non_max_suppression, scale_coords
 
 NODE_NAME = "yolov5_model"
 
