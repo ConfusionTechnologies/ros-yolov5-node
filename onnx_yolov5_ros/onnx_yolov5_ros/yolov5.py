@@ -9,7 +9,7 @@ import rclpy
 from cv_bridge import CvBridge
 from foxglove_msgs.msg import ImageMarkerArray
 from geometry_msgs.msg import Point
-from nicefaces.msg import BBox2D, ObjDet2Ds
+from nicefaces.msg import BBox2D, ObjDet2Ds, TrackData
 from nicepynode import Job, JobCfg
 from nicepynode.utils import (
     RT_PUB_PROFILE,
@@ -254,8 +254,15 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
             detsmsg.boxes.d.frombytes(dets[:, 3].tobytes())
 
             detsmsg.scores.frombytes(dets[:, 4].tobytes())
-            for i in dets[:, 5].astype(int):
-                detsmsg.labels.append(self.label_map[i])
+
+            for d in dets:
+                label = self.label_map[int(d[5])]
+                detsmsg.labels.append(label)
+                detsmsg.tracks.append(
+                    TrackData(
+                        label=label, x=d[[0, 2]], y=d[[1, 3]], scores=(d[4], d[4])
+                    )
+                )
 
             self._pred_pub.publish(detsmsg)
 
