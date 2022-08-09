@@ -14,6 +14,7 @@ from nicepynode import Job, JobCfg
 from nicepynode.utils import (
     RT_PUB_PROFILE,
     RT_SUB_PROFILE,
+    append_array,
     declare_parameters_from_dataclass,
     letterbox,
 )
@@ -248,12 +249,12 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
             detsmsg.boxes.type = BBox2D.XYXY
             detsmsg.boxes.is_norm = False
 
-            detsmsg.boxes.a.frombytes(dets[:, 0].tobytes())
-            detsmsg.boxes.b.frombytes(dets[:, 1].tobytes())
-            detsmsg.boxes.c.frombytes(dets[:, 2].tobytes())
-            detsmsg.boxes.d.frombytes(dets[:, 3].tobytes())
+            append_array(detsmsg.boxes.a, dets[:, 0])
+            append_array(detsmsg.boxes.b, dets[:, 1])
+            append_array(detsmsg.boxes.c, dets[:, 2])
+            append_array(detsmsg.boxes.d, dets[:, 3])
 
-            detsmsg.scores.frombytes(dets[:, 4].tobytes())
+            append_array(detsmsg.scores, dets[:, 4])
 
             for d in dets:
                 label = self.label_map[int(d[5])]
