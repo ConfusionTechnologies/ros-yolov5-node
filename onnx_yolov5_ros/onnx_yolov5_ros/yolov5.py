@@ -90,6 +90,10 @@ class YoloV5Cfg(JobCfg):
     #  - points vs bbox
     #  - normalized or not
     #  - bbox type, XYXY vs XYWH vs CBOX
+    assume_coco: bool = False
+    """Assume given YOLO model is trained for COCO 80 classes."""
+    assume_face: bool = False
+    """For non-compliant YOLO face model from https://github.com/deepcam-cn/yolov5-face"""
 
 
 @dataclass
@@ -149,6 +153,8 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
 
     @property
     def clsid_include(self):
+        if self.label_map is None:
+            self._clsid_include = []
         if self._clsid_include is None:
             self._clsid_include = [
                 self.label_map.index(c)
@@ -182,11 +188,21 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
         # YoloV7 toolkit does not add model_details
         if not model_details:
             # TODO: THESE ARE HARDCODED ASSUMPTIONS
-            self.log.warn("Model Metadata Empty! Assuming default COCO YOLO model...")
-            self.stride = 64
-            self.label_map = literal_eval(
-                "['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket', 'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch', 'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop', 'mouse', 'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush']"
+            self.log.warn("Model Metadata Empty!")
+            self.stride = 32
+
+            self.log.warn(
+                f"Assumption settings: assume_coco={cfg.assume_coco}, assume_solo={cfg.assume_face}"
             )
+            if cfg.assume_coco:
+                self.label_map = literal_eval(
+                    "['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket', 'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch', 'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop', 'mouse', 'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush']"
+                )
+            elif cfg.assume_face:
+                self.label_map = None
+            else:
+                self.label_map = None
+
         else:
             self.stride = int(model_details["stride"])
             # bad design choice by YOLOv5 toolkit, we can only mitigate it...
@@ -203,8 +219,15 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
         # NHWC, RGB, float32
         x = (x / 255).transpose(0, 3, 1, 2)  # NCHW, RGB
 
-        # output #0: (N, CONCAT, 85)
+        # output #0: (N, CONCAT, 85) (x, y, x, y, obj conf, ...80 classes conf)
         y = self.session.run([self._sess_out_name], {self._sess_in_name: x})[0]
+
+        # for face models from https://github.com/deepcam-cn/yolov5-face
+        # output #0: (N, CONCAT, 16) (x, y, x, y, obj conf, (x, y) * 5 face landmarks, 1 * class conf)
+        # face models rn processed wrong as face landmarks interpreted as classes
+        # hence disable using classes for tracking for face models (technically theres only 1 class anyways)
+        if self.label_map is None and self.cfg.assume_face:
+            y = y[..., np.r_[:5, -1]]
 
         dets = non_max_suppression(
             y,
@@ -257,7 +280,12 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
             append_array(detsmsg.scores, dets[:, 4])
 
             for d in dets:
-                label = self.label_map[int(d[5])]
+                label = (
+                    self.label_map[int(d[5])]
+                    if not self.label_map is None
+                    else str(int(d[5]))
+                )
+
                 detsmsg.labels.append(label)
                 detsmsg.tracks.append(
                     TrackData(
