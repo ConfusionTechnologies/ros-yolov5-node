@@ -95,7 +95,7 @@ class YoloV5Cfg(JobCfg):
     """Assume given YOLO model is trained for COCO 80 classes."""
     assume_face: bool = False
     """For non-compliant YOLO face model from https://github.com/deepcam-cn/yolov5-face"""
-    bbox_type: int = BBox2D.XYWH
+    bbox_type: int = BBox2D.XYXY
     """Output type for bbox."""
     normalize_coords: bool = False
     """Whether to normalize bbox."""
