@@ -97,7 +97,7 @@ class YoloV5Cfg(JobCfg):
     """For non-compliant YOLO face model from https://github.com/deepcam-cn/yolov5-face"""
     bbox_type: int = BBox2D.XYWH
     """Output type for bbox."""
-    normalize_bbox: bool = False
+    normalize_coords: bool = False
     """Whether to normalize bbox."""
 
 
@@ -290,11 +290,11 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
             append_array(detsmsg.boxes.c, dets[:, 2])
             append_array(detsmsg.boxes.d, dets[:, 3])
 
-            if self.cfg.bbox_type != BBox2D.XYXY or self.cfg.normalize_bbox:
+            if self.cfg.bbox_type != BBox2D.XYXY or self.cfg.normalize_coords:
                 detsmsg.boxes = convert_bboxes(
                     detsmsg.boxes,
                     to_type=self.cfg.bbox_type,
-                    normalize=self.cfg.normalize_bbox,
+                    normalize=self.cfg.normalize_coords,
                     img_wh=img.shape[1::-1],
                 )
 
