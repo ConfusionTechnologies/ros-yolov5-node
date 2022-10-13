@@ -15,6 +15,7 @@ from nicepynode.utils import (
     RT_PUB_PROFILE,
     RT_SUB_PROFILE,
     append_array,
+    convert_bboxes,
     declare_parameters_from_dataclass,
     letterbox,
 )
@@ -94,6 +95,10 @@ class YoloV5Cfg(JobCfg):
     """Assume given YOLO model is trained for COCO 80 classes."""
     assume_face: bool = False
     """For non-compliant YOLO face model from https://github.com/deepcam-cn/yolov5-face"""
+    bbox_type: int = BBox2D.XYWH
+    """Output type for bbox."""
+    normalize_bbox: bool = False
+    """Whether to normalize bbox."""
 
 
 @dataclass
@@ -142,7 +147,15 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
     def on_params_change(self, node: Node, changes: dict):
         self.log.info(f"Config changed: {changes}.")
         if not all(
-            n in ("score_threshold", "nms_threshold", "class_include") for n in changes
+            n
+            in (
+                "score_threshold",
+                "nms_threshold",
+                "class_include",
+                "bbox_type",
+                "normalize_bbox",
+            )
+            for n in changes
         ):
             self.log.info(f"Config change requires restart.")
             return True
@@ -276,6 +289,14 @@ class YoloV5Predictor(Job[YoloV5Cfg]):
             append_array(detsmsg.boxes.b, dets[:, 1])
             append_array(detsmsg.boxes.c, dets[:, 2])
             append_array(detsmsg.boxes.d, dets[:, 3])
+
+            if self.cfg.bbox_type != BBox2D.XYXY or self.cfg.normalize_bbox:
+                detsmsg.boxes = convert_bboxes(
+                    detsmsg.boxes,
+                    to_type=self.cfg.bbox_type,
+                    normalize=self.cfg.normalize_bbox,
+                    img_wh=img.shape[1::-1],
+                )
 
             append_array(detsmsg.scores, dets[:, 4])
 
